@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GitHub issue templates**, PR template, `FUNDING.yml`.
 - **`.gitattributes`** — normalizes line endings to LF across all platforms to prevent CRLF/LF drift in CI.
 - 5 additional `EventType` values now emitted: `MODEL_ROUTED`, `PARALLEL_BRANCH_STARTED`, `PARALLEL_BRANCH_COMPLETED`, `RUN_PAUSED`, `REFUSAL_TRIGGERED`.
+- **Streamed tool-call reassembly** — `OllamaProvider.stream_complete()` now accumulates `tool_calls` arriving on any non-final NDJSON line (deduplicated by id) and re-emits the full set, so a call delivered on an earlier chunk and repeated (or not repeated) on `done` survives to the consumer. `LiteLLMProvider.stream_complete()` accumulates `delta.tool_calls` fragments (index/id/name + split JSON `arguments` pieces) and yields a single fully-assembled `tool_calls` chunk after the stream ends.
+- **Specialist JSON self-correction** — new opt-in `SpecialistConfig.max_json_retries` (default 0 = unchanged behavior). When JSON output is expected and the model returns a tool-call-free response that does not parse, the specialist feeds the attempt back with a "return ONLY JSON" prompt and re-invokes the model, bounded by `max_json_retries` and `max_iterations`.
 
 ### Changed
 - **Cross-platform CI** — `pyproject.toml` no longer promotes third-party deprecation warnings to errors (the previous `filterwarnings = ["error"]` policy failed on macOS/Windows due to platform-specific dependency warnings). Tests that used Unix-only APIs (`resource`, `os.geteuid`, bare `os.symlink`) now degrade gracefully on Windows.
