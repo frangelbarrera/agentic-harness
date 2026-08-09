@@ -229,9 +229,7 @@ class Specialist(ABC):
                 # loop max_iterations.
                 if wants_json and json_retries_left > 0 and not self._json_parse_ok(response):
                     json_retries_left -= 1
-                    messages.append(
-                        LLMMessage(role="assistant", content=response.content or "")
-                    )
+                    messages.append(LLMMessage(role="assistant", content=response.content or ""))
                     messages.append(
                         LLMMessage(
                             role="user",

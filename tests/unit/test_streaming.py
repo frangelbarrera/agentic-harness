@@ -669,8 +669,12 @@ class TestLiteLLMStreamComplete:
         chunk = SimpleNamespace(choices=[SimpleNamespace(delta={"content": None})])
         _patch_litellm_acompletion_stream(monkeypatch, [chunk])
         provider = LiteLLMProvider()
-        chunks = [c async for c in provider.stream_complete(
-            [LLMMessage(role="user", content="hi")], model="openai/gpt-4o")]
+        chunks = [
+            c
+            async for c in provider.stream_complete(
+                [LLMMessage(role="user", content="hi")], model="openai/gpt-4o"
+            )
+        ]
         assert chunks == []
 
     @pytest.mark.asyncio

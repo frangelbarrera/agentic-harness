@@ -145,8 +145,9 @@ async def test_stream_propagates_tool_calls(server):
             }
         )
         + "\n",
-        json.dumps({"message": {"content": ""}, "done": True,
-                    "prompt_eval_count": 100, "eval_count": 20})
+        json.dumps(
+            {"message": {"content": ""}, "done": True, "prompt_eval_count": 100, "eval_count": 20}
+        )
         + "\n",
     ]
     p = _provider(server)
@@ -161,8 +162,9 @@ async def test_stream_yields_usage_on_final_chunk(server):
     _FakeOllamaHandler.ndjson_lines = [
         json.dumps({"message": {"content": "he"}, "done": False}) + "\n",
         json.dumps({"message": {"content": "llo"}, "done": False}) + "\n",
-        json.dumps({"message": {"content": ""}, "done": True,
-                     "prompt_eval_count": 40, "eval_count": 5})
+        json.dumps(
+            {"message": {"content": ""}, "done": True, "prompt_eval_count": 40, "eval_count": 5}
+        )
         + "\n",
     ]
     p = _provider(server)
@@ -177,8 +179,9 @@ async def test_stream_skips_malformed_lines(server):
     _FakeOllamaHandler.ndjson_lines = [
         "this is not json\n",
         json.dumps({"message": {"content": "ok"}, "done": False}) + "\n",
-        json.dumps({"message": {"content": ""}, "done": True,
-                     "prompt_eval_count": 1, "eval_count": 1})
+        json.dumps(
+            {"message": {"content": ""}, "done": True, "prompt_eval_count": 1, "eval_count": 1}
+        )
         + "\n",
     ]
     p = _provider(server)
@@ -233,17 +236,26 @@ async def test_stream_accumulates_tool_calls_across_chunks(server):
     """
     _FakeOllamaHandler.ndjson_lines = [
         json.dumps(
-            {"message": {"tool_calls": [{"function": {"name": "tool_a", "arguments": {"x": 1}}}]},
-             "done": False}
+            {
+                "message": {
+                    "tool_calls": [{"function": {"name": "tool_a", "arguments": {"x": 1}}}]
+                },
+                "done": False,
+            }
         )
         + "\n",
         json.dumps(
-            {"message": {"tool_calls": [{"function": {"name": "tool_b", "arguments": {"y": 2}}}]},
-             "done": False}
+            {
+                "message": {
+                    "tool_calls": [{"function": {"name": "tool_b", "arguments": {"y": 2}}}]
+                },
+                "done": False,
+            }
         )
         + "\n",
-        json.dumps({"message": {"content": ""}, "done": True,
-                     "prompt_eval_count": 10, "eval_count": 2})
+        json.dumps(
+            {"message": {"content": ""}, "done": True, "prompt_eval_count": 10, "eval_count": 2}
+        )
         + "\n",
     ]
     p = _provider(server)
@@ -258,15 +270,27 @@ async def test_stream_no_duplicates_when_done_repeats_tool_calls(server):
     """If the done line repeats the tool_calls list, ids are deduplicated."""
     _FakeOllamaHandler.ndjson_lines = [
         json.dumps(
-            {"message": {"tool_calls": [{"id": "call_1", "function": {"name": "tool_a",
-                                                                        "arguments": {}}}]},
-             "done": False}
+            {
+                "message": {
+                    "tool_calls": [
+                        {"id": "call_1", "function": {"name": "tool_a", "arguments": {}}}
+                    ]
+                },
+                "done": False,
+            }
         )
         + "\n",
         json.dumps(
-            {"message": {"tool_calls": [{"id": "call_1", "function": {"name": "tool_a",
-                                                                       "arguments": {}}}]},
-             "done": True, "prompt_eval_count": 5, "eval_count": 1}
+            {
+                "message": {
+                    "tool_calls": [
+                        {"id": "call_1", "function": {"name": "tool_a", "arguments": {}}}
+                    ]
+                },
+                "done": True,
+                "prompt_eval_count": 5,
+                "eval_count": 1,
+            }
         )
         + "\n",
     ]
