@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -69,6 +70,69 @@ def _get_usage_field(usage: Any, field: str) -> int:
     if isinstance(usage, dict):
         return usage.get(field, 0) or 0
     return getattr(usage, field, 0) or 0
+
+
+def _merge_delta_tool_calls(delta: Any, acc: list[dict[str, Any]]) -> None:
+    """Merge one streamed ``delta.tool_calls`` fragment into ``acc``.
+
+    ``delta`` may be a litellm ``Delta`` pydantic model OR a plain dict.
+    Streaming providers send the tool call as fragments across several
+    chunks: the first chunk carries the call's ``index``/``id``/``name``,
+    later chunks append ``arguments`` pieces. Entries in ``acc`` are keyed
+    by ``index``; string arguments are concatenated in arrival order so a
+    split JSON-arguments string reassembles correctly. Non-string argument
+    fragments (rare) are JSON-serialized on the spot.
+    """
+    raw = delta.get("tool_calls") if isinstance(delta, dict) else getattr(delta, "tool_calls", None)
+    if not raw:
+        return
+    for item in raw:
+        if isinstance(item, dict):
+            index = item.get("index")
+            function = item.get("function")
+            call_id = item.get("id")
+        else:
+            index = getattr(item, "index", None)
+            function = getattr(item, "function", None)
+            call_id = getattr(item, "id", None)
+        if isinstance(function, dict):
+            name = function.get("name")
+            arguments = function.get("arguments")
+        elif function is not None:
+            name = getattr(function, "name", None)
+            arguments = getattr(function, "arguments", None)
+        else:
+            name, arguments = None, None
+        if arguments is not None and not isinstance(arguments, str):
+            arguments = json.dumps(arguments)
+        entry = next((e for e in acc if e["index"] == index), None)
+        if entry is None:
+            entry = {"index": index, "id": call_id, "name": name, "args_parts": []}
+            acc.append(entry)
+        if not entry["name"] and name:
+            entry["name"] = name
+        if not entry["id"] and call_id:
+            entry["id"] = call_id
+        if arguments:
+            entry["args_parts"].append(arguments)
+
+
+def _finalize_tool_calls(acc: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize accumulated stream fragments to the OpenAI tool_calls shape."""
+    tool_calls: list[dict[str, Any]] = []
+    for entry in acc:
+        name = entry["name"]
+        if not name:
+            continue
+        arguments = "".join(entry["args_parts"]) if entry["args_parts"] else "{}"
+        tool_calls.append(
+            {
+                "id": entry["id"] or f"call_{name}",
+                "type": "function",
+                "function": {"name": name, "arguments": arguments},
+            }
+        )
+    return tool_calls
 
 
 class LiteLLMProvider(LLMProvider):
@@ -248,6 +312,10 @@ class LiteLLMProvider(LLMProvider):
         final_tokens_out = 0
         final_cost = 0.0
         saw_usage = False
+        # Streaming tool_calls arrive as fragments spread over multiple
+        # chunks (index/id/name first, then arguments pieces). Accumulate
+        # and re-emit as a single assembled tool_calls chunk at the end.
+        pending_tool_calls: list[dict[str, Any]] = []
 
         async for chunk in stream:
             choices = getattr(chunk, "choices", None) or []
@@ -271,6 +339,9 @@ class LiteLLMProvider(LLMProvider):
             # ``ModelResponse`` objects.
             content = _get_delta_content(delta)
 
+            # Fold any streamed tool_call fragments into the accumulator.
+            _merge_delta_tool_calls(delta, pending_tool_calls)
+
             # Capture usage if present on this chunk (litellm surfaces it
             # on the final chunk for vendors that stream usage).
             usage = getattr(chunk, "usage", None)
@@ -287,6 +358,25 @@ class LiteLLMProvider(LLMProvider):
                 yield LLMResponse(
                     content=content,
                     tool_calls=[],
+                    usage=LLMUsage(
+                        tokens_in=0,
+                        tokens_out=0,
+                        cost_usd=0.0,
+                        model=model,
+                        cached=False,
+                    ),
+                    model=model,
+                )
+
+        # Assembled tool calls are yielded as one chunk so the consumer's
+        # last-non-empty-wins accumulation picks them up even though no
+        # single streamed chunk ever carried the complete list.
+        if pending_tool_calls:
+            assembled = _finalize_tool_calls(pending_tool_calls)
+            if assembled:
+                yield LLMResponse(
+                    content="",
+                    tool_calls=assembled,
                     usage=LLMUsage(
                         tokens_in=0,
                         tokens_out=0,

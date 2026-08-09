@@ -9,6 +9,45 @@ from typing import Any
 from arnes.llm.base import LLMMessage, LLMProvider, LLMResponse, LLMUsage
 
 
+def _normalize_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize Ollama ``message.tool_calls`` to the OpenAI shape.
+
+    Ollama returns ``{"function": {"name": ..., "arguments": {...}}}`` where
+    ``arguments`` may be an object. Everything else in ARNES expects
+    ``{"id": ..., "type": "function", "function": {"name": ..., "arguments": "<json-str>"}}``.
+    Malformed entries are skipped.
+    """
+    tool_calls: list[dict[str, Any]] = []
+    raw_tool_calls = message.get("tool_calls")
+    if not isinstance(raw_tool_calls, list):
+        return tool_calls
+    for tc in raw_tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        function = tc.get("function") or {}
+        # Defensive: malformed entries must be skipped, never crash the
+        # whole provider (a provider that dies on one bad tool_call does
+        # exactly the thing callers can't recover from).
+        if not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        if not name:
+            continue
+        args = function.get("arguments", {})
+        if isinstance(args, (dict, list)):
+            args = json.dumps(args)
+        elif args is None:
+            args = "{}"
+        tool_calls.append(
+            {
+                "id": tc.get("id") or f"call_{name}",
+                "type": "function",
+                "function": {"name": name, "arguments": args},
+            }
+        )
+    return tool_calls
+
+
 class OllamaProvider(LLMProvider):
     """Local Ollama provider. Requires `ollama serve` running on localhost:11434.
 
@@ -58,7 +97,7 @@ class OllamaProvider(LLMProvider):
                 resp = await client.post(f"{self.host}/api/chat", json=payload)
                 resp.raise_for_status()
                 data = resp.json()
-        except httpx.ConnectError as e:
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             raise RuntimeError(
                 f"Cannot connect to Ollama at {self.host}. "
                 "Install with: curl -fsSL https://ollama.com/install.sh | sh && ollama pull llama3.2"
@@ -69,37 +108,7 @@ class OllamaProvider(LLMProvider):
         eval_count = data.get("eval_count", 0)
         prompt_eval_count = data.get("prompt_eval_count", 0)
 
-        # Parse tool_calls from the Ollama response (v0.3.0+). Older versions
-        # or non-tool-aware models won't return this field — fall back to an
-        # empty list rather than hardcoding [] so callers can distinguish
-        # "model returned no tool calls" from "provider didn't look".
-        tool_calls: list[dict[str, Any]] = []
-        raw_tool_calls = message.get("tool_calls")
-        if isinstance(raw_tool_calls, list):
-            for tc in raw_tool_calls:
-                if not isinstance(tc, dict):
-                    continue
-                function = tc.get("function") or {}
-                # Ollama returns {"function": {"name": ..., "arguments": {...}}}.
-                # Normalize to the OpenAI shape used everywhere else in ARNES:
-                # {"id": ..., "type": "function", "function": {"name": ..., "arguments": "<json-str>"}}
-                name = function.get("name")
-                if not name:
-                    continue
-                args = function.get("arguments", {})
-                # OpenAI ships arguments as a JSON string; mirror that so the
-                # downstream specialist `_execute_tool_call` can json.loads it.
-                if isinstance(args, (dict, list)):
-                    args = json.dumps(args)
-                elif args is None:
-                    args = "{}"
-                tool_calls.append(
-                    {
-                        "id": tc.get("id") or f"call_{name}",
-                        "type": "function",
-                        "function": {"name": name, "arguments": args},
-                    }
-                )
+        tool_calls = _normalize_tool_calls(message)
 
         return LLMResponse(
             content=content,
@@ -183,6 +192,12 @@ class OllamaProvider(LLMProvider):
                 async with client.stream("POST", f"{self.host}/api/chat", json=payload) as response:
                     response.raise_for_status()
                     final_usage_yielded = False
+                    # Ollama may deliver a tool call on one non-final line and
+                    # NOT repeat it on the done line. Keep a cumulative list so
+                    # tool_calls arriving at any point survive to the consumer
+                    # (which uses last-non-empty-wins). Deduplicated by id so a
+                    # `done` line that repeats the full list doesn't duplicate.
+                    pending_tool_calls: list[dict[str, Any]] = []
                     async for line in response.aiter_lines():
                         if not line:
                             continue
@@ -201,16 +216,29 @@ class OllamaProvider(LLMProvider):
                         content = message.get("content") or ""
                         done = bool(chunk.get("done", False))
 
+                        # A tool-calling model emits its call(s) on a chunk
+                        # whose content is usually empty. Parse them on every
+                        # chunk and fold them into the cumulative list so
+                        # nothing is dropped from the stream, even if the
+                        # call's chunks are split across several lines.
+                        line_tool_calls = _normalize_tool_calls(message)
+                        for tc in line_tool_calls:
+                            if tc.get("id") not in {t["id"] for t in pending_tool_calls}:
+                                pending_tool_calls.append(tc)
+                        tool_calls = list(pending_tool_calls)
+
                         if done:
                             # Final chunk: Ollama only sends prompt_eval_count
                             # / eval_count on the done=true line. If this
-                            # chunk also carries a trailing content token
-                            # (rare but possible), yield it before the usage-
-                            # only final chunk so no tokens are lost.
-                            if content:
+                            # chunk itself also carries a trailing content
+                            # token or tool call (commonly a tool-calling
+                            # model repeats the full list on done), yield it
+                            # before the usage-only final chunk so nothing is
+                            # lost — the usage chunk stays tool-free.
+                            if content or line_tool_calls:
                                 yield LLMResponse(
                                     content=content,
-                                    tool_calls=[],
+                                    tool_calls=tool_calls,
                                     usage=LLMUsage(
                                         tokens_in=0,
                                         tokens_out=0,
@@ -236,10 +264,10 @@ class OllamaProvider(LLMProvider):
                             )
                             return
 
-                        # Regular token chunk
+                        # Regular token / tool-call chunk
                         yield LLMResponse(
                             content=content,
-                            tool_calls=[],
+                            tool_calls=tool_calls,
                             usage=LLMUsage(
                                 tokens_in=0,
                                 tokens_out=0,
@@ -268,7 +296,7 @@ class OllamaProvider(LLMProvider):
                             ),
                             model=full_model,
                         )
-        except httpx.ConnectError as e:
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             raise RuntimeError(
                 f"Cannot connect to Ollama at {self.host}. "
                 "Install with: curl -fsSL https://ollama.com/install.sh | sh && ollama pull llama3.2"
