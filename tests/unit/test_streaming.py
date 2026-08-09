@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -76,6 +76,7 @@ def _build_fake_streaming_httpx(
     fake_httpx = MagicMock()
     fake_httpx.AsyncClient = MagicMock(return_value=fake_client)
     fake_httpx.ConnectError = type("ConnectError", (Exception,), {})
+    fake_httpx.ConnectTimeout = type("ConnectTimeout", (Exception,), {})
     return fake_httpx, fake_client.stream
 
 
@@ -83,6 +84,7 @@ def _build_fake_streaming_httpx_connect_error() -> MagicMock:
     """Build a fake ``httpx`` module whose stream ``__aenter__`` raises ConnectError."""
     fake_httpx = MagicMock()
     connect_error = fake_httpx.ConnectError = type("ConnectError", (Exception,), {})
+    fake_httpx.ConnectTimeout = type("ConnectTimeout", (Exception,), {})
 
     fake_stream_cm = MagicMock()
     fake_stream_cm.__aenter__ = AsyncMock(side_effect=connect_error("connection refused"))
@@ -125,7 +127,7 @@ def _make_stream_chunk(
 
 def _patch_litellm_acompletion_stream(
     monkeypatch: pytest.MonkeyPatch,
-    chunks: list[ModelResponse],
+    chunks: Sequence[Any],
 ) -> AsyncMock:
     """Replace ``litellm.acompletion`` with an AsyncMock returning a fake stream.
 
@@ -614,6 +616,62 @@ class TestLiteLLMStreamComplete:
         assert len(chunks) == 2
         assert all(c.usage.tokens_in == 0 for c in chunks)
         assert all(c.usage.tokens_out == 0 for c in chunks)
+
+    @pytest.mark.asyncio
+    async def test_litellm_stream_assembles_tool_calls_from_fragments(self, monkeypatch):
+        """Streamed ``delta.tool_calls`` fragments must be reassembled into a
+        single tool_calls chunk, or the ReAct loop in streaming mode would
+        silently never see any tool call from a hosted provider.
+        """
+        from types import SimpleNamespace
+
+        def frag(tool_calls: list[dict[str, object]]) -> SimpleNamespace:
+            return SimpleNamespace(
+                choices=[SimpleNamespace(delta={"content": None, "tool_calls": tool_calls})]
+            )
+
+        chunks_data: list[object] = [
+            frag(
+                [
+                    {
+                        "index": 0,
+                        "id": "call_123",
+                        "function": {"name": "get_weather", "arguments": ""},
+                    }
+                ]
+            ),
+            frag([{"index": 0, "function": {"arguments": '{"city": "Madri'}}]),
+            frag([{"index": 0, "function": {"arguments": 'd"}'}}]),
+        ]
+        _patch_litellm_acompletion_stream(monkeypatch, chunks_data)
+
+        provider = LiteLLMProvider()
+        chunks: list[LLMResponse] = []
+        async for chunk in provider.stream_complete(
+            [LLMMessage(role="user", content="weather in Madrid?")],
+            model="openai/gpt-4o",
+        ):
+            chunks.append(chunk)
+
+        with_tools = [c for c in chunks if c.tool_calls]
+        assert len(with_tools) == 1
+        call = with_tools[0].tool_calls[0]
+        assert call["id"] == "call_123"
+        assert call["function"]["name"] == "get_weather"
+        # Fragments reassembled in order into one JSON-arguments string.
+        assert call["function"]["arguments"] == '{"city": "Madrid"}'
+
+    @pytest.mark.asyncio
+    async def test_litellm_stream_handles_plain_delta_without_tool_calls(self, monkeypatch):
+        """Chunks with neither content nor tool_calls are simply skipped."""
+        from types import SimpleNamespace
+
+        chunk = SimpleNamespace(choices=[SimpleNamespace(delta={"content": None})])
+        _patch_litellm_acompletion_stream(monkeypatch, [chunk])
+        provider = LiteLLMProvider()
+        chunks = [c async for c in provider.stream_complete(
+            [LLMMessage(role="user", content="hi")], model="openai/gpt-4o")]
+        assert chunks == []
 
     @pytest.mark.asyncio
     async def test_litellm_stream_merges_init_kwargs(self, monkeypatch):

@@ -50,6 +50,7 @@ def _build_fake_httpx(response_payload: dict[str, Any]) -> tuple[MagicMock, Magi
     fake_httpx = MagicMock()
     fake_httpx.AsyncClient = MagicMock(return_value=fake_client)
     fake_httpx.ConnectError = type("ConnectError", (Exception,), {})  # for the except clause
+    fake_httpx.ConnectTimeout = type("ConnectTimeout", (Exception,), {})
     return fake_httpx, fake_client.post
 
 
