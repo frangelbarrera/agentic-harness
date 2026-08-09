@@ -73,6 +73,12 @@ class SpecialistConfig(BaseModel):
     temperature: float = 0.0
     max_tokens: int | None = None
     max_iterations: int = 5  # ReAct loop limit
+    # When >0 and the specialist expects JSON, a response that is not valid
+    # JSON is sent back to the model as a self-correction prompt (instead of
+    # failing immediately). Each correction consumes one loop iteration, so it
+    # is bounded by both max_iterations and this value. Off by default — not
+    # all providers reliably honor the response_format hint.
+    max_json_retries: int = 0
 
 
 class Specialist(ABC):
@@ -177,6 +183,7 @@ class Specialist(ABC):
         # tool-call payload as a malformed "final" response.
         final_response: LLMResponse | None = None
         response: LLMResponse | None = None
+        json_retries_left = self.config.max_json_retries
 
         for iteration in range(self.config.max_iterations):
             try:
@@ -213,8 +220,36 @@ class Specialist(ABC):
             # the step completes.
             self._emit_assistant_message(wrapped_provider, ctx, response, model)
 
-            # If no tool calls, we have the final response
+            # If no tool calls, we have a candidate final response
             if not response.tool_calls:
+                # Self-correction: if JSON output is expected and the model
+                # ignored the response_format hint, feed its attempt back and
+                # ask for strict JSON instead of failing on the first
+                # non-conforming response. Bounded by max_json_retries and the
+                # loop max_iterations.
+                if wants_json and json_retries_left > 0 and not self._json_parse_ok(response):
+                    json_retries_left -= 1
+                    messages.append(
+                        LLMMessage(role="assistant", content=response.content or "")
+                    )
+                    messages.append(
+                        LLMMessage(
+                            role="user",
+                            content=(
+                                "Your previous response was NOT valid JSON, so it could not "
+                                "be used. Return ONLY a single JSON object matching the "
+                                "schema. No prose, no markdown code fences, no trailing "
+                                "explanations. It must parse with json.loads."
+                            ),
+                        )
+                    )
+                    logger.info(
+                        "specialist_json_self_correct",
+                        specialist=self.config.name,
+                        retries_left=json_retries_left,
+                        iteration=iteration,
+                    )
+                    continue
                 final_response = response
                 break
 
@@ -724,6 +759,25 @@ class Specialist(ABC):
             f"Process this input according to your role. "
             f"Return JSON matching the schema. Use tools if needed."
         )
+
+    @staticmethod
+    def _json_parse_ok(response: LLMResponse) -> bool:
+        """Cheap check: does the LLM response contain valid JSON?
+
+        Used by the JSON self-correction path to decide whether a
+        tool-call-free response can be validated as the final answer or
+        must be sent back for a correction retry. Kept intentionally
+        lighter than :meth:`_parse_and_validate_output` (no pydantic /
+        schema checks) — anything that is not even parseable is what we
+        retry on.
+        """
+        if not response.content:
+            return False
+        try:
+            json.loads(Specialist._clean_json_response(response.content))
+            return True
+        except json.JSONDecodeError:
+            return False
 
     @staticmethod
     def _clean_json_response(content: str) -> str:
