@@ -55,7 +55,7 @@ dependencies = [
     "structlog>=24.4,<27",
     "rich>=13.7,<15",
     "click>=8.1,<9",
-    "litellm>=1.82.0,<1.97",
+    "litellm>=1.82.0,<1.98",
     "mcp>=1.0,<2",
 ]
 
