@@ -1,10 +1,6 @@
-# GitHub Sponsors / funding configuration for ARNES.
+# GitHub Sponsors / funding configuration.
 # Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
 # The "Sponsor" button on the repo page is rendered from this file.
 
 github: [frangelbarrera]
-open_collective: arnes
 buy_me_a_coffee: frangelbarrera
-# Custom platforms can be added below as `platform: username`.
-# See the full list of supported platforms in the GitHub docs above.
-custom: ["https://arnes.dev/sponsor"]
