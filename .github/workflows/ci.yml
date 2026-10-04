@@ -23,12 +23,17 @@ jobs:
             python-version: "3.13"
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.19"
 
       - name: Configure Windows environment
         if: runner.os == 'Windows'
@@ -40,18 +45,16 @@ jobs:
           echo "PYTHONIOENCODING=utf-8" >> "$GITHUB_ENV"
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+        run: uv sync --all-extras --dev --locked
 
       - name: Lint with ruff
-        run: ruff check arnes/ tests/
+        run: uv run ruff check arnes/ tests/
 
       - name: Format check with ruff
-        run: ruff format --check arnes/ tests/
+        run: uv run ruff format --check arnes/ tests/
 
       - name: Type check with mypy
-        run: mypy arnes/ --strict
+        run: uv run mypy arnes/ --strict
 
       - name: Test with pytest
         # -x stops at the first failure so the log shows the exact broken test.
@@ -59,21 +62,21 @@ jobs:
         # --junitxml produces a machine-readable report uploaded as an artifact
         # on failure, so cross-platform breakages are diagnosable from the UI.
         run: >
-          pytest tests/ -x -vv
+          uv run pytest tests/ -x -vv
           --junitxml=pytest-report.xml
           --cov=arnes --cov-report=xml --cov-report=term
           --cov-fail-under=65
 
       - name: Upload pytest report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: pytest-report-${{ matrix.os }}-${{ matrix.python-version }}
           path: pytest-report.xml
 
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
         with:
           file: ./coverage.xml
           fail_ci_if_error: false
@@ -82,46 +85,50 @@ jobs:
     name: Security checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.19"
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+        run: uv sync --all-extras --dev --locked
 
       - name: Run bandit security scan
-        run: bandit -r arnes/ -c pyproject.toml
+        run: uv run bandit -r arnes/ -c pyproject.toml
 
       - name: Run pip-audit
-        run: pip-audit --ignore-vuln PYSEC-2026-1845
+        run: uv run pip-audit --ignore-vuln PYSEC-2026-1845
 
   build:
     name: Build package
     runs-on: ubuntu-latest
     needs: [test, security]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.19"
 
       - name: Install build tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install build
+        run: uv sync --all-extras --dev --locked
 
       - name: Build package
-        run: python -m build
+        run: uv build
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dist
           path: dist/

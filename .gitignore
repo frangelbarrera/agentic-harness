@@ -82,5 +82,4 @@ var/
 venv.bak/
 venv/
 wheels/
-uv.lock
 arnes-run-*.md
