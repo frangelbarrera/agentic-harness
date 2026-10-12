@@ -41,7 +41,7 @@
 ## Quick install
 
 ```bash
-pip install agentic-harness
+pip install arnes
 ```
 
 ## Why Agentic Harness?
@@ -276,7 +276,7 @@ Agentic Harness aligns explicitly with the [12 factors](https://github.com/human
 ## Installation
 
 ```bash
-pip install agentic-harness
+pip install arnes
 ```
 
 Or install from source for development:
