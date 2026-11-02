@@ -74,7 +74,7 @@ dev = [
     "mypy>=1.13,<3",
     "bandit>=1.7,<2",
     "pip-audit>=2.7,<3",
-    "vcrpy>=6.0,<9",
+    "vcrpy>=6.0,<10",
     "freezegun>=1.5,<2",
     "types-PyYAML>=6.0,<7",
 ]
